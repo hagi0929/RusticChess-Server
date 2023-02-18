@@ -1,37 +1,35 @@
-use actix::{Actor, StreamHandler};
-use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
-use actix_web_actors::ws;
+mod lobby;
+mod message;
+mod model;
+mod webserver;
+mod ws;
+pub mod game;
+pub mod error;
 
-/// Define HTTP actor
-struct MyWs;
-
-impl Actor for MyWs {
-    type Context = ws::WebsocketContext<Self>;
-}
-
-/// Handler for ws::Message message
-impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWs {
-    fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
-        match msg {
-            Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),
-            Ok(ws::Message::Text(text)) => ctx.text(text),
-            Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
-            _ => (),
-        }
-    }
-}
-
-async fn index(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    let resp = ws::start(MyWs {}, &req, stream);
-    println!("{:?}", resp);
-    resp
-}
+use actix::Actor;
+use actix_web::{web, App, HttpServer};
+use tera::Tera;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    HttpServer::new(|| App::new().route("/ws/", web::get().to(index)))
-        .bind(("127.0.0.1", 8080))?
-        .run()
-        .await
-}
+    let host: String = std::env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port: u16 = std::env::var("SERVER_PORT").unwrap_or_else(|_| "7878".to_string()).parse().unwrap();
 
+    // let tera = Tera::new("/home/ubuntu/webactix/templates/**/*").unwrap();
+    let tera = Tera::new(concat!(env!("CARGO_MANIFEST_DIR"), "/templates/**/*")).unwrap();
+    let chess_ws_server = lobby::Lobby::default().start();
+
+    println!("Web Actix server start on {}:{}", host, port);
+    HttpServer::new(move || {
+        App::new()
+            .app_data(web::Data::new(tera.clone()))
+            .service(webserver::index)
+            .service(webserver::game)
+            .service(webserver::staticfiles)
+            .app_data(web::Data::new(chess_ws_server.clone()))
+            .service(ws::start_connection)
+    })
+    .bind((host, port))?
+    .run()
+    .await
+}
